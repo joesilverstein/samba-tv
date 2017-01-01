@@ -1,0 +1,178 @@
+---
+title: "Samba TV Data Science Challenge"
+author: "Joe Silverstein"
+date: "12/13/2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Description of the Problem:
+
+Spanish speaking users have a much higher conversion rate than other Spanish-speaking countries, and I'm trying to figure out why that is. The Spain and LatAm country manager suggested that it could be happening because the translation was written by a Spaniard. 
+
+A study was conducted in which some users were given the same Spanish translation as before, while others were given a localized translation. However, the conversion rate among non-Spanish users reading their localized translations was actually lower, which seems counterintuitive. I am also trying to figure out why that is happening.
+
+```{r, include = FALSE}
+setwd("~/Workspace/SambaTV/")
+
+user_table = read.csv("Translation_Test__281_29/user_table.csv")
+test_table = read.csv("Translation_Test__281_29/test_table.csv")
+
+# test: 0 if saw old translation, 1 if saw new translation
+
+length(unique(user_table$user_id))
+length(unique(test_table$user_id))
+
+# Conclude that user_id is unique identifier in both datasets.
+merged_table = merge(user_table, test_table, by = "user_id", all = TRUE)
+
+# I first need to check to see if everything is as described in the question.
+
+# Spaniard-translated conversion-rate of non-Spanish Spanish-speaking users:
+spanish_language = subset(merged_table, browser_language == "ES" & country != "Spain" & test == 0)
+mean(spanish_language$conversion)
+
+# Spaniard-translated conversion-rate of Spanish Spanish-speaking users:
+# Note that there is no new vs. old methodology for Spain, since it's already localized.
+spain = subset(merged_table, browser_language == "ES" & country == "Spain")
+mean(spain$conversion)
+
+# Conversion rates are clearly significantly different, considering the 
+# number of observations. It's obvious enough that there's no need to
+# formally test this hypothesis.
+```
+
+## 1. Investigate if the test is actually negative:
+
+The mean conversion rate of the control dataset is shown below:
+
+```{r}
+mean(spanish_language$conversion)
+```
+
+```{r, include = FALSE}
+# Localized conversion-rate of Spanish-speaking users:
+spanish_language_test = subset(merged_table, browser_language == "ES" & country != "Spain" & test == 1)
+```
+
+The mean conversion rate of the test dataset is shown below:
+
+```{r}
+mean(spanish_language_test$conversion)
+```
+
+The test appears to actually be negative, since 0.0435 < 0.0486. However, it's unclear whether the difference is statistically significant. Note that the control and test sets contain mutually-exclusive users, so that they can be considered approximately independent for the purposes of this analysis and we can use the two sample t-test to compare the means:
+
+```{r}
+t.test(spanish_language$conversion, spanish_language_test$conversion)
+```
+
+Note that the 95% confidence interval of the difference in means does not contain 0, so I conclude that the difference in the means is statistically significant. Therefore, the test is negative.
+
+## 2. Explain why that might be happening. Are the localized translations really worse?
+
+Localized translations are not necessarily worse, since there could be other explanations. First, I'll check to see if the demographics of the control and test users appear to be different in any way. Here is the control:
+
+```{r}
+summary(spanish_language)
+```
+
+And here is the test:
+
+```{r}
+summary(spanish_language_test)
+```
+
+The age distribution looks similar, so that's not the problem. Now, compare male vs. female proportions. Here is the control:
+
+```{r}
+table(spanish_language$sex) / nrow(spanish_language)
+```
+
+And here is the test:
+```{r}
+table(spanish_language_test$sex) / nrow(spanish_language_test)
+```
+
+Looks similar, so that's probably not the problem. Check country distribution:
+
+```{r}
+table(spanish_language$country) / nrow(spanish_language)
+table(spanish_language_test$country) / nrow(spanish_language_test)
+```
+
+There are a lot more Argentinians in the test set than in the control, so this could be the problem or part of the problem. There some differences between the proportions in other countries as well.
+
+Now, check the date distribution:
+
+```{r}
+table(spanish_language$date) / nrow(spanish_language)
+table(spanish_language_test$date) / nrow(spanish_language_test)
+```
+
+Not a problem. Check source:
+
+```{r}
+table(spanish_language$source) / nrow(spanish_language)
+table(spanish_language_test$source) / nrow(spanish_language_test)
+```
+
+Not a problem. Check device:
+
+```{r}
+table(spanish_language$device) / nrow(spanish_language)
+table(spanish_language_test$device) / nrow(spanish_language_test)
+```
+
+No significant difference. Check ads_channel:
+
+```{r}
+table(spanish_language$ads_channel) / nrow(spanish_language)
+table(spanish_language_test$ads_channel) / nrow(spanish_language_test)
+```
+
+No significant difference. Check browser:
+
+```{r}
+table(spanish_language$browser) / nrow(spanish_language)
+table(spanish_language_test$browser) / nrow(spanish_language_test)
+```
+
+No significant difference again.
+
+It looks like the two user samples are drawn from different populations, but only along the country dimension. So the study was not designed correctly. Since the control and test users are not comparable, we can't conclude based on this study whether the localized translations are really worse.
+
+## 3. Algorithm
+
+This algorithm will return FALSE if the same problem is happening in the future and TRUE if everything is good and the results can be trusted. That is, it tests whether the country distribution of the control sample is significantly different from the country distribution of the test sample. It does this by performing a two-sample t-test to compare the proportions of each of the countries between the two datasets. If any of them show a difference at the 95% confidence level, the algorithm returns FALSE. Otherwise, it returns TRUE.:
+
+```{r, echo = TRUE}
+# control: Control dataframe (must include country column)
+# test: Test dataframe (must include country column)
+same_country = function(control, test) {
+  
+  control_countries = levels(control$country)
+  test_countries = levels(test$country)
+  
+  if (sum(control_countries != test_countries) > 0) {
+    return(FALSE)
+  } else {
+    for (country in control_countries) {
+      control_country_indicator = (control$country == paste(country))
+      test_country_indicator = (test$country == paste(country))
+      ttest = t.test(control_country_indicator, test_country_indicator)
+      # H0: Means are equal
+      if (ttest$p.value < 0.05) {
+        return(FALSE)
+      }
+    }
+  }
+  
+  return(TRUE)
+}
+```
+
+
